@@ -73,8 +73,12 @@ app.use('/api', createToolsRouter(sendUpdateNotification));
 app.use('/api', createUsersRouter(sendUpdateNotification));
 app.use('/api', createEnrollRouter());
 app.use('/api', createFirmwareRouter());
-app.use('/api', createKioskRouter());
+// Training must be mounted BEFORE the kiosk router: kiosk is mounted at /api
+// with a router-level requireKioskSecret guard (router.use), so any unmatched
+// /api/* request that reaches it is rejected with 401 'Unauthorized' before
+// falling through. Mounting training first lets /api/training/sync match here.
 app.use('/api/training', createTrainingRouter(sendUpdateNotification));
+app.use('/api', createKioskRouter());
 
 // SPA fallback
 app.get('*', (_req, res) => {
