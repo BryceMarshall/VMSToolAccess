@@ -14,6 +14,7 @@
 #include "nvs_flash.h"
 #include "SpindleTime.h"
 #include "iot_servo.h"
+#include "mdns.h"   // resolver for .local hostnames
 //#include "Syslog.h"
 
 #include "led_strip.h"
@@ -247,6 +248,18 @@ void app_main(void)
         led_strip_refresh(led_strip);
         ESP_LOGI(TAG, "Waiting for WiFi connection...");
         vTaskDelay(pdMS_TO_TICKS(1000));
+    }
+
+    // Start mDNS so esp_http_client can resolve .local hostnames
+    // (masterUrl = https://makespace-rpi.local:3080/). Init once, after the
+    // interface has an IP. We only need the resolver, not hostname advertising.
+    {
+        esp_err_t mdnsErr = mdns_init();
+        if (mdnsErr != ESP_OK) {
+            ESP_LOGE(TAG, "mdns_init failed: %s", esp_err_to_name(mdnsErr));
+        } else {
+            ESP_LOGI(TAG, "mDNS resolver started");
+        }
     }
 
     servo_init();

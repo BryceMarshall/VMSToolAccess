@@ -749,3 +749,130 @@ export function addAuditEntry(userId: number, action: string): boolean {
     return false;
   }
 }
+
+// ── Training-software sync ──────────────────────────────────────────────────
+
+// One user record from the training system, already filtered to those who
+// should have access (see the route for the ismember/code filter).
+export interface TrainingUser {
+  externalId: number;   // training system's stable member id
+  fullName: string;
+  email: string | null;
+  phone: string | null;
+}
+
+export interface SyncResult {
+  inserted: number;
+  updated: number;
+  granted: number;
+  revoked: number;
+}
+
+// Authoritative sync of a tool's access list against the training system.
+//
+// Scope: training is authoritative over its OWN population only. A user is
+// "training-managed" iff they have a non-null externalId. This function:
+//   1. Upserts each incoming user, matched on externalId (insert if new,
+//      update name/email/phone if changed). Card is never touched here —
+//      cards are issued separately and must survive syncs.
+//   2. Grants type=1 permission on the tool to every incoming user.
+//   3. Revokes type=1 permission from training-managed users who currently
+//      have it but are NOT in the incoming set (e.g. lapsed certification).
+//
+// Manually-added users (externalId IS NULL) are never inserted, updated, or
+// revoked — manual grants via the UI/kiosk are preserved.
+export function syncTrainingUsers(toolId: number, incoming: TrainingUser[]): SyncResult | { error: string } {
+  try {
+    const result: SyncResult = { inserted: 0, updated: 0, granted: 0, revoked: 0 };
+
+    db.transaction(tx => {
+      // Verify the tool exists (fail loudly rather than silently no-op).
+      const tool = tx.select({ id: toolsTable.id })
+        .from(toolsTable)
+        .where(eq(toolsTable.id, toolId))
+        .all()[0];
+      if (!tool) throw new Error('Tool not found');
+
+      const incomingUserIds: number[] = [];
+
+      for (const u of incoming) {
+        // Match on externalId.
+        const existing = tx.select({
+          id: usersTable.id,
+          fullName: usersTable.fullName,
+          email: usersTable.email,
+          phone: usersTable.phone,
+        })
+          .from(usersTable)
+          .where(eq(usersTable.externalId, u.externalId))
+          .all()[0];
+
+        let userId: number;
+        if (existing) {
+          userId = existing.id;
+          // Update only if a tracked field actually changed.
+          if (existing.fullName !== u.fullName || existing.email !== u.email || existing.phone !== u.phone) {
+            tx.update(usersTable).set({
+              fullName: u.fullName,
+              email: u.email,
+              phone: u.phone,
+            }).where(eq(usersTable.id, userId)).run();
+            result.updated++;
+          }
+        } else {
+          const ins = tx.insert(usersTable).values({
+            fullName: u.fullName,
+            email: u.email,
+            phone: u.phone,
+            externalId: u.externalId,
+            isGroup: false,
+          }).run();
+          userId = Number(ins.lastInsertRowid);
+          result.inserted++;
+        }
+
+        incomingUserIds.push(userId);
+
+        // Grant type=1 access (idempotent via the (toolId,userId) unique index).
+        const grant = tx.insert(permissionsTable)
+          .values({ toolId, userId, type: 1 })
+          .onConflictDoNothing()
+          .run();
+        if (grant.changes > 0) result.granted++;
+      }
+
+      // Revoke: training-managed users (externalId not null) who hold a type=1
+      // permission on this tool but are not in the incoming set.
+      const currentlyPermitted = tx.select({ userId: permissionsTable.userId })
+        .from(permissionsTable)
+        .innerJoin(usersTable, eq(usersTable.id, permissionsTable.userId))
+        .where(and(
+          eq(permissionsTable.toolId, toolId),
+          eq(permissionsTable.type, 1),
+          sql`${usersTable.externalId} IS NOT NULL`,
+        ))
+        .all()
+        .map(r => r.userId ?? 0);
+
+      const incomingSet = new Set(incomingUserIds);
+      for (const uid of currentlyPermitted) {
+        if (!incomingSet.has(uid)) {
+          tx.delete(permissionsTable)
+            .where(and(
+              eq(permissionsTable.toolId, toolId),
+              eq(permissionsTable.userId, uid),
+              eq(permissionsTable.type, 1),
+            ))
+            .run();
+          result.revoked++;
+        }
+      }
+    });
+
+    return result;
+  } catch(e: any) {
+    const msg: string = e?.message ?? 'Internal error';
+    console.log('Error in syncTrainingUsers: ' + msg);
+    return { error: msg === 'Tool not found' ? msg : 'Internal error' };
+  }
+}

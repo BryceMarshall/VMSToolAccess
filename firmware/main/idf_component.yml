@@ -16,3 +16,4 @@ dependencies:
   #   public: true
   espressif/led_strip: ^2.5.4
   espressif/servo: '*'
+  espressif/mdns: '*'   # resolver for .local hostnames (masterUrl uses makespace-rpi.local)

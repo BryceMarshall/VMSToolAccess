@@ -16,6 +16,10 @@ export const users = sqliteTable('Users', {
   card: text('card').unique(),
   doorCard: text('doorCard').unique(),
   isGroup: integer('isGroup', { mode: 'boolean' }).default(false),
+  // Stable identity from the training system (GymMaster member id). Null for
+  // users created manually or via the enrollment kiosk. Used as the match key
+  // for the authoritative training sync.
+  externalId: integer('externalId').unique(),
 });
 
 export const portalUsers = sqliteTable('PortalUsers', {

@@ -27,7 +27,7 @@ public:
 private:
     char m_wifiSid[32];
     char m_wifiPass[32];
-    char m_masterUrl[32];
+    char m_masterUrl[64];   // hostnames (e.g. makespace-rpi.local:3080) exceed 32
     char m_macAddress[32];
     char m_syslogHost[32];
     uint16_t m_syslogPort;
